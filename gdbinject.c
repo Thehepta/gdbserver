@@ -12,6 +12,7 @@
 #include <sys/user.h>
 #include <sys/ptrace.h>
 #include <sys/syscall.h>
+#include <pthread.h>
 
 #include "arch.h"
 #include "utils.h"
@@ -44,8 +45,10 @@ struct debug_breakpoint_t
     size_t orig_data;
 } breakpoints[BREAKPOINT_NUMBER];
 
+void handle_general_set(char *payload);
+
 uint8_t tmpbuf[0x20000];
-bool attach = false;
+bool attach = true;
 
 void sigint_pid()
 {
@@ -232,10 +235,6 @@ void process_query(char *payload)
         snprintf(tmpbuf, sizeof(tmpbuf), "QCp%02x.%02x", threads.curr->pid, threads.curr->tid);
         write_packet(tmpbuf);
     }
-    if (!strcmp(name, "NonStop"))
-    {
-        write_packet("OK");
-    }
     if (!strcmp(name, "Attached"))
     {
         if (attach)
@@ -390,7 +389,7 @@ void process_vpacket(char *payload)
             flags = gdb_open_flags_to_system_flags(flags);
             assert((mode & ~(int64_t)0777) == 0);
             fd = open(tmpbuf, flags, mode);
-            printf("gdb open file: %s fd = %d\n",tmpbuf,fd);
+            printf("gdb open file: %s fd:%d\n",tmpbuf,fd);
             sprintf(result, "F%x", fd);
             write_packet(result);
         }
@@ -490,8 +489,8 @@ void process_packet()
     uint8_t *inbuf = inbuf_get();
     int inbuf_size = inbuf_end();
     uint8_t *packetend_ptr = (uint8_t *)memchr(inbuf, '#', inbuf_size);
-    int packetend = packetend_ptr - inbuf;
     printf("recv : %s \n",inbuf);
+    int packetend = packetend_ptr - inbuf;
     assert('$' == inbuf[0]);
     char request = inbuf[1];
     char *payload = (char *)&inbuf[2];
@@ -506,17 +505,20 @@ void process_packet()
     switch (request)
     {
         case 'D':
-            for (int i = 0, n = 0; i < THREAD_NUMBER && n < threads.len; i++)
-                if (threads.t[i].tid)
-                    if (ptrace(PTRACE_DETACH, threads.t[i].tid, NULL, NULL) < 0)
-                        perror("ptrace()");
+            printf("process Detach\n");
+//            for (int i = 0, n = 0; i < THREAD_NUMBER && n < threads.len; i++)
+//                if (threads.t[i].tid)
+//                    if (ptrace(PTRACE_DETACH, threads.t[i].tid, NULL, NULL) < 0)
+//                        perror("ptrace()");
             exit(0);
         case 'g':
         {
-            regs_struct regs;
+            printf("process GetRegs\n");
+
+            regs_struct regs={0};
             uint8_t regbuf[20];
             tmpbuf[0] = '\0';
-            ptrace(PTRACE_GETREGS, threads.curr->tid, NULL, &regs);
+            getRegister(&regs);
             for (int i = 0; i < ARCH_REG_NUM; i++)
             {
                 mem2hex((void *)(((size_t *)&regs) + regs_map[i].idx), regbuf, regs_map[i].size);
@@ -527,6 +529,7 @@ void process_packet()
             break;
         }
         case 'H':
+            printf("process set_curr_thread\n");
             if ('g' == *payload++)
             {
                 pid_t tid;
@@ -540,24 +543,26 @@ void process_packet()
             break;
         case 'm':
         {
-            size_t maddr, mlen, mdata;
+            size_t  maddr,mlen, mdata;
             assert(sscanf(payload, "%zx,%zx", &maddr, &mlen) == 2);
+            printf("process peekdata(read mem) 0x%zx,0x%zx \n", maddr, mlen);
+
             if (mlen * SZ * 2 > 0x20000)
             {
                 puts("Buffer overflow!");
                 exit(-1);
             }
-            for (int i = 0; i < mlen; i += SZ)
+            int i=0;
+            for (int c = 0; c < mlen; c += SZ,i++)
             {
                 errno = 0;
-                mdata = ptrace(PTRACE_PEEKDATA, threads.curr->tid, maddr + i, NULL);
+                mdata = ((size_t*)maddr)[i];
                 if (errno)
                 {
                     sprintf(tmpbuf, "E%02x", errno);
                     break;
                 }
-                mdata = restore_breakpoint(maddr, sizeof(size_t), mdata);
-                mem2hex((void *)&mdata, tmpbuf + i * 2, (mlen - i >= SZ ? SZ : mlen - i));
+                mem2hex((void *)&mdata, tmpbuf + c * 2, (mlen - c >= SZ ? SZ : mlen - c));
             }
             tmpbuf[mlen * 2] = '\0';
             write_packet(tmpbuf);
@@ -565,24 +570,26 @@ void process_packet()
         }
         case 'M':
         {
-            size_t maddr, mlen, mdata;
-            assert(sscanf(payload, "%zx,%zx", &maddr, &mlen) == 2);
-            for (int i = 0; i < mlen; i += SZ)
-            {
-                if (mlen - i >= SZ)
-                    hex2mem(payload + i * 2, (void *)&mdata, SZ);
-                else
-                {
-                    mdata = ptrace(PTRACE_PEEKDATA, threads.curr->tid, maddr + i, NULL);
-                    hex2mem(payload + i * 2, (void *)&mdata, mlen - i);
-                }
-                ptrace(PTRACE_POKEDATA, threads.curr->tid, maddr + i, mdata);
-            }
+            printf("process pokedata(write mem)\n");
+//            size_t maddr, mlen, mdata;
+//            assert(sscanf(payload, "%zx,%zx", &maddr, &mlen) == 2);
+//            for (int i = 0; i < mlen; i += SZ)
+//            {
+//                if (mlen - i >= SZ)
+//                    hex2mem(payload + i * 2, (void *)&mdata, SZ);
+//                else
+//                {
+//                    mdata = ptrace(PTRACE_PEEKDATA, threads.curr->tid, maddr + i, NULL);
+//                    hex2mem(payload + i * 2, (void *)&mdata, mlen - i);
+//                }
+//                ptrace(PTRACE_POKEDATA, threads.curr->tid, maddr + i, mdata);
+//            }
             write_packet("OK");
             break;
         }
         case 'p':
         {
+            printf("process PTRACE_PEEKUSER\n");
             int i = strtol(payload, NULL, 16);
             if (i >= ARCH_REG_NUM && i != EXTRA_NUM)
             {
@@ -607,6 +614,7 @@ void process_packet()
         }
         case 'P':
         {
+            printf("process P PTRACE_POKEUSER\n");
             int i = strtol(payload, &payload, 16);
             assert('=' == *payload++);
             if (i >= ARCH_REG_NUM && i != EXTRA_NUM)
@@ -624,15 +632,18 @@ void process_packet()
             break;
         }
         case 'q':
+            printf("process_query\n");
             process_query(payload);
-
-//        case 'Q':
+        case 'Q':
+            handle_general_set(payload);
             break;
         case 'v':
+            printf("process_vpacket\n");
             process_vpacket(payload);
             break;
         case 'X':
         {
+            printf("X\n");
             size_t maddr, mlen, mdata;
             int offset, new_len;
             assert(sscanf(payload, "%zx,%zx:%n", &maddr, &mlen, &offset) == 2);
@@ -655,6 +666,7 @@ void process_packet()
         }
         case 'Z':
         {
+            printf("Z\n");
             size_t type, addr, length;
             assert(sscanf(payload, "%zx,%zx,%zx", &type, &addr, &length) == 3);
             if (type == 0 && sizeof(break_instr))
@@ -671,6 +683,7 @@ void process_packet()
         }
         case 'z':
         {
+            printf("z\n");
             size_t type, addr, length;
             assert(sscanf(payload, "%zx,%zx,%zx", &type, &addr, &length) == 3);
             if (type == 0)
@@ -685,32 +698,21 @@ void process_packet()
                 write_packet("");
             break;
         }
-        case '?':{
+        case '?':
             write_packet("S05");
-//            write_packet("OK");
-//            struct thread_id_t *ptr = threads.t;
-//            uint8_t pid_buf[20];
-//            assert(threads.len > 0);
-//            strcpy(tmpbuf, "m");
-//            for (int i = 0; i < threads.len; i++, ptr++)
-//            {
-//                while (!ptr->tid)
-//                    ptr++;
-//                snprintf(pid_buf, sizeof(pid_buf), "p%02x.%02x,", ptr->pid, ptr->tid);
-//                strcat(tmpbuf, pid_buf);
-//            }
-//            tmpbuf[strlen(tmpbuf) - 1] = '\0';
-//            write_packet(tmpbuf);
             break;
-        }
-
-
         default:
+            printf("empty\n");
             write_packet("");
     }
 
     inbuf_erase_head(packetend + 3);
 }
+
+void handle_general_set(char *payload) {
+
+}
+
 
 void get_request()
 {
@@ -722,6 +724,14 @@ void get_request()
     }
 }
 
+void* threadFunc(void* arg) {
+
+    get_request();
+    return NULL;
+
+}
+
+
 int main(int argc, char *argv[])
 {
     pid_t pid;
@@ -729,71 +739,50 @@ int main(int argc, char *argv[])
     char *arg_end, *target = NULL;
     int stat;
 
-    if (*next_arg != NULL && strcmp(*next_arg, "--attach") == 0)
-    {
-        attach = true;
-        next_arg++;
-    }
+//  if (*next_arg != NULL && strcmp(*next_arg, "--attach") == 0)
+//  {
+//    attach = true;
+    next_arg++;
+//  }
 
     target = *next_arg;
     next_arg++;
 
-    if (target == NULL || *next_arg == NULL)
-    {
-        printf("Usage : gdbserver 127.0.0.1:1234 a.out or gdbserver --attach 127.0.0.1:1234 2468\n");
-        exit(-1);
-    }
+//  if (target == NULL || *next_arg == NULL)
+//  {
+//    printf("Usage : gdbserver 127.0.0.1:1234 a.out or gdbserver --attach 127.0.0.1:1234 2468\n");
+//    exit(-1);
+//  }
 
-    if (attach)
-    {
-        pid = atoi(*next_arg);
-        init_tids(pid);
-        for (int i = 0, n = 0; i < THREAD_NUMBER && n < threads.len; i++)
-            if (threads.t[i].tid)
-            {
-                if (ptrace(PTRACE_ATTACH, threads.t[i].tid, NULL, NULL) < 0)
-                {
-                    perror("ptrace()");
-                    return -1;
-                }
-                if (waitpid(threads.t[i].tid, &threads.t[i].stat, __WALL) < 0)
-                {
-                    perror("waitpid");
-                    return -1;
-                }
-                ptrace(PTRACE_SETOPTIONS, threads.t[i].tid, NULL, PTRACE_O_TRACECLONE);
-                n++;
-            }
-    }
-    else
-    {
-        pid = fork();
-        if (pid == 0)
-        {
-            char **args = next_arg;
-            setpgrp();
-            ptrace(PTRACE_TRACEME, 0, NULL, NULL);
-            execvp(args[0], args);
-            perror(args[0]);
-            _exit(1);
-        }
-        if (waitpid(pid, &stat, __WALL) < 0)
-        {
-            perror("waitpid");
-            return -1;
-        }
-        threads.t[0].pid = threads.t[0].tid = pid;
-        threads.t[0].stat = stat;
-        threads.len = 1;
-        int options = PTRACE_O_TRACECLONE;
-#ifdef PTRACE_O_EXITKILL
-        options |= PTRACE_O_EXITKILL;
-#endif
-        ptrace(PTRACE_SETOPTIONS, pid, NULL, options);
-    }
+//  if (attach)
+//  {
+//    pid = atoi(*next_arg);
+    init_tids(getpid());
+//    for (int i = 0, n = 0; i < THREAD_NUMBER && n < threads.len; i++)
+//      if (threads.t[i].tid)
+//      {
+//        if (ptrace(PTRACE_ATTACH, threads.t[i].tid, NULL, NULL) < 0)
+//        {
+//          perror("ptrace()");
+//          return -1;
+//        }
+//        if (waitpid(threads.t[i].tid, &threads.t[i].stat, __WALL) < 0)
+//        {
+//          perror("waitpid");
+//          return -1;
+//        }
+//        ptrace(PTRACE_SETOPTIONS, threads.t[i].tid, NULL, PTRACE_O_TRACECLONE);
+//        n++;
+//      }
+//  }
     threads.curr = &threads.t[0];
-    initialize_async_io(sigint_pid);
+//    initialize_async_io(sigint_pid);
     remote_prepare(target);
-    get_request();
+
+    pthread_t thread;
+    pthread_create(&thread, NULL, threadFunc, NULL);
+    pthread_join(thread, NULL);
+    printf("Main thread finished\n");
+
     return 0;
 }

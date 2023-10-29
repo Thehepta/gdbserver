@@ -91,6 +91,35 @@ struct reg_struct regs_map[] = {
     {GS, 4},
 };
 
+
+
+void getRegister(regs_struct *reg){
+    unsigned long value;
+    asm("movq %%rsp, %0" : "=r" (reg->rsp));
+    asm("movq %%r14, %0" : "=r" (reg->r14));
+    asm("movq %%r13, %0" : "=r" (reg->r13));
+    asm("movq %%r12, %0" : "=r" (reg->r12));
+    asm("movq %%rbp, %0" : "=r" (reg->rbp));
+    asm("movq %%rbx, %0" : "=r" (reg->rbx));
+    asm("movq %%r11, %0" : "=r" (reg->r11));
+    asm("movq %%r10, %0" : "=r" (reg->r10));
+    asm("movq %%r9, %0" : "=r" (reg->r9));
+    asm("movq %%r8, %0" : "=r" (reg->r8));
+    asm("movq %%rax, %0" : "=r" (reg->rax));
+    asm("movq %%rcx, %0" : "=r" (reg->rcx));
+    asm("movq %%rdx, %0" : "=r" (reg->rdx));
+    asm("movq %%rsi, %0" : "=r" (reg->rsi));
+    asm("movq %%rdi, %0" : "=r" (reg->rdi));
+    reg->rip=getRegister;
+    asm("movq %%cs, %0" : "=r" (reg->cs));
+    asm("movq %%ss, %0" : "=r" (reg->ss));
+    asm("movq %%ds, %0" : "=r" (reg->ds));
+    asm("movq %%es, %0" : "=r" (reg->es));
+    asm("movq %%fs, %0" : "=r" (reg->fs));
+    asm("movq %%gs, %0" : "=r" (reg->gs));
+
+}
+
 #endif /* __x86_64__ */
 
 #ifdef __arm__
@@ -126,7 +155,12 @@ struct reg_struct regs_map[] = {
     {15, 4},
 };
 
+void getRegister(regs_struct *reg);
+
 #endif /* __arm__ */
+
+
+
 
 #ifdef __powerpc__
 
@@ -226,7 +260,11 @@ struct reg_struct regs_map[] = {
     {37, 4},
     {38, 4},
 };
+void getRegister(regs_struct *reg);
 
 #endif /* __powerpc__ */
+
+
+
 
 #endif /* ARCH_H */

@@ -104,6 +104,7 @@ void read_data_once()
 void write_flush()
 {
     size_t write_index = 0;
+    printf("write_flush %s\n",out.buf);
     while (write_index < out.end)
     {
         ssize_t nwritten;
